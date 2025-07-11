@@ -1,0 +1,286 @@
+import cv2
+import mediapipe as mp
+import numpy as np
+import os
+import pickle
+from sklearn.neural_network import MLPClassifier
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import classification_report, confusion_matrix
+import matplotlib.pyplot as plt
+import seaborn as sns
+from tqdm import tqdm
+
+# Initialize MediaPipe Face Mesh
+mp_face_mesh = mp.solutions.face_mesh
+mp_drawing = mp.solutions.drawing_utils
+
+class EmotionLandmarkExtractor:
+    def __init__(self):
+        self.face_mesh = mp_face_mesh.FaceMesh(
+            static_image_mode=True,
+            max_num_faces=1,
+            refine_landmarks=True,
+            min_detection_confidence=0.5
+        )
+        
+    def extract_landmarks(self, image_path):
+        """Extract facial landmarks from an image"""
+        try:
+            # Read image
+            image = cv2.imread(image_path)
+            if image is None:
+                return None
+                
+            # Convert to RGB
+            image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            
+            # Process image
+            results = self.face_mesh.process(image_rgb)
+            
+            if results.multi_face_landmarks:
+                # Get the first face landmarks
+                landmarks = results.multi_face_landmarks[0]
+                
+                # Extract landmark coordinates
+                landmark_coords = []
+                for landmark in landmarks.landmark:
+                    landmark_coords.extend([landmark.x, landmark.y, landmark.z])
+                
+                return np.array(landmark_coords)
+            else:
+                return None
+                
+        except Exception as e:
+            print(f"Error processing {image_path}: {e}")
+            return None
+    
+    def close(self):
+        self.face_mesh.close()
+
+def load_dataset(data_dir):
+    """Load dataset and extract landmarks"""
+    emotions = ['angry', 'disgust', 'fear', 'happy', 'neutral', 'sad', 'surprise']
+    emotion_to_idx = {emotion: idx for idx, emotion in enumerate(emotions)}
+    
+    X = []  # Landmarks
+    y = []  # Labels
+    
+    extractor = EmotionLandmarkExtractor()
+    
+    print("Extracting facial landmarks from dataset...")
+    
+    for emotion in emotions:
+        emotion_dir = os.path.join(data_dir, emotion)
+        if not os.path.exists(emotion_dir):
+            continue
+            
+        print(f"Processing {emotion} images...")
+        image_files = [f for f in os.listdir(emotion_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+        
+        for image_file in tqdm(image_files, desc=emotion):
+            image_path = os.path.join(emotion_dir, image_file)
+            landmarks = extractor.extract_landmarks(image_path)
+            
+            if landmarks is not None:
+                X.append(landmarks)
+                y.append(emotion_to_idx[emotion])
+    
+    extractor.close()
+    
+    return np.array(X), np.array(y), emotions
+
+def train_mlp_model(X_train, y_train, X_val, y_val):
+    """Train MLP model with hyperparameter tuning and loss curve plotting"""
+    print("Training MLP model...")
+    
+    # Scale the features
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_val_scaled = scaler.transform(X_val)
+    
+    # Define MLP model with verbose output for loss tracking
+    mlp = MLPClassifier(
+        hidden_layer_sizes=(256, 128, 64),
+        activation='relu',
+        solver='adam',
+        alpha=0.001,
+        batch_size=64,
+        learning_rate='adaptive',
+        learning_rate_init=0.001,
+        max_iter=1000,
+        random_state=42,
+        early_stopping=True,
+        validation_fraction=0.1,
+        n_iter_no_change=20,
+        verbose=True  # Enable verbose output to track training
+    )
+    
+    # Train the model
+    mlp.fit(X_train_scaled, y_train)
+    
+    # Plot loss curves
+    plot_loss_curves(mlp)
+    
+    return mlp, scaler
+
+def plot_loss_curves(model):
+    """Plot training and validation loss curves"""
+    print("Plotting loss curves...")
+    
+    # Get loss history from the model
+    if hasattr(model, 'loss_curve_'):
+        train_loss = model.loss_curve_
+        
+        # Create the plot
+        plt.figure(figsize=(12, 8))
+        
+        # Plot training loss
+        plt.subplot(2, 2, 1)
+        plt.plot(train_loss, 'b-', linewidth=2, label='Training Loss')
+        plt.title('Training Loss Curve')
+        plt.xlabel('Iteration')
+        plt.ylabel('Loss')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        
+        # Plot training loss with log scale
+        plt.subplot(2, 2, 2)
+        plt.semilogy(train_loss, 'b-', linewidth=2, label='Training Loss (Log Scale)')
+        plt.title('Training Loss Curve (Log Scale)')
+        plt.xlabel('Iteration')
+        plt.ylabel('Loss (Log Scale)')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        
+        # Plot loss improvement
+        plt.subplot(2, 2, 3)
+        loss_improvement = [train_loss[0] - loss for loss in train_loss]
+        plt.plot(loss_improvement, 'g-', linewidth=2, label='Loss Improvement')
+        plt.title('Loss Improvement Over Time')
+        plt.xlabel('Iteration')
+        plt.ylabel('Loss Improvement')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        
+        # Plot convergence analysis
+        plt.subplot(2, 2, 4)
+        if len(train_loss) > 10:
+            # Calculate moving average for smoother curve
+            window_size = min(10, len(train_loss) // 10)
+            moving_avg = [np.mean(train_loss[max(0, i-window_size):i+1]) 
+                         for i in range(len(train_loss))]
+            plt.plot(moving_avg, 'r-', linewidth=2, label=f'Moving Average (window={window_size})')
+            plt.plot(train_loss, 'b-', alpha=0.5, linewidth=1, label='Raw Loss')
+        else:
+            plt.plot(train_loss, 'r-', linewidth=2, label='Training Loss')
+        
+        plt.title('Loss Convergence Analysis')
+        plt.xlabel('Iteration')
+        plt.ylabel('Loss')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.savefig('loss_curves.png', dpi=300, bbox_inches='tight')
+        plt.show()
+        
+        # Print training statistics
+        print(f"\nTraining Statistics:")
+        print(f"Initial Loss: {train_loss[0]:.6f}")
+        print(f"Final Loss: {train_loss[-1]:.6f}")
+        print(f"Total Improvement: {train_loss[0] - train_loss[-1]:.6f}")
+        print(f"Improvement Percentage: {((train_loss[0] - train_loss[-1]) / train_loss[0] * 100):.2f}%")
+        print(f"Total Iterations: {len(train_loss)}")
+        
+        # Check for convergence
+        if len(train_loss) > 20:
+            recent_losses = train_loss[-20:]
+            loss_std = np.std(recent_losses)
+            print(f"Loss Stability (std of last 20 iterations): {loss_std:.6f}")
+            
+            if loss_std < 1e-6:
+                print("✓ Model appears to have converged (stable loss)")
+            else:
+                print("⚠ Model may still be training (unstable loss)")
+        
+    else:
+        print("Warning: Loss curve not available. Model may not have verbose output enabled.")
+
+def evaluate_model(model, scaler, X_test, y_test, emotions):
+    """Evaluate the trained model"""
+    print("Evaluating model...")
+    
+    X_test_scaled = scaler.transform(X_test)
+    y_pred = model.predict(X_test_scaled)
+    
+    # Print classification report
+    print("\nClassification Report:")
+    print(classification_report(y_test, y_pred, target_names=emotions))
+    
+    # Create confusion matrix
+    cm = confusion_matrix(y_test, y_pred)
+    
+    # Plot confusion matrix
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
+                xticklabels=emotions, yticklabels=emotions)
+    plt.title('Confusion Matrix')
+    plt.ylabel('True Label')
+    plt.xlabel('Predicted Label')
+    plt.tight_layout()
+    plt.savefig('confusion_matrix.png')
+    plt.show()
+    
+    return y_pred
+
+def save_model(model, scaler, emotions, filename='emotion_model.pkl'):
+    """Save the trained model and scaler"""
+    model_data = {
+        'model': model,
+        'scaler': scaler,
+        'emotions': emotions
+    }
+    
+    with open(filename, 'wb') as f:
+        pickle.dump(model_data, f)
+    
+    print(f"Model saved to {filename}")
+
+def main():
+    # Load training data
+    print("Loading training dataset...")
+    X_train_full, y_train_full, emotions = load_dataset('facial_expression_dataset/train')
+    
+    # Load test data
+    print("Loading test dataset...")
+    X_test_full, y_test_full, _ = load_dataset('facial_expression_dataset/test')
+    
+    print(f"Training samples: {len(X_train_full)}")
+    print(f"Test samples: {len(X_test_full)}")
+    print(f"Number of features (landmarks): {X_train_full.shape[1]}")
+    print(f"Emotion classes: {emotions}")
+    
+    # Split training data into train and validation
+    X_train, X_val, y_train, y_val = train_test_split(
+        X_train_full, y_train_full, test_size=0.2, random_state=42, stratify=y_train_full
+    )
+    
+    # Train the model
+    model, scaler = train_mlp_model(X_train, y_train, X_val, y_val)
+    
+    # Evaluate on validation set
+    print("\nValidation Set Performance:")
+    evaluate_model(model, scaler, X_val, y_val, emotions)
+    
+    # Evaluate on test set
+    print("\nTest Set Performance:")
+    evaluate_model(model, scaler, X_test_full, y_test_full, emotions)
+    
+    # Save the model
+    save_model(model, scaler, emotions)
+    
+    print("\nTraining completed successfully!")
+
+if __name__ == "__main__":
+    main() 
