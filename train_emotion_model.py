@@ -10,7 +10,9 @@ from sklearn.metrics import classification_report, confusion_matrix
 import matplotlib.pyplot as plt
 import seaborn as sns
 from tqdm import tqdm
+import datetime
 
+DB_DIR = 'raf-db'
 
 # Initialize MediaPipe Face Mesh
 mp_face_mesh = mp.solutions.face_mesh
@@ -121,7 +123,7 @@ def train_mlp_model(X_train, y_train, X_val, y_val):
         batch_size=64,
         learning_rate='adaptive',
         learning_rate_init=0.001,
-        max_iter=1000,
+        max_iter=500,
         random_state=42,
         early_stopping=True,
         validation_fraction=0.1,
@@ -260,14 +262,87 @@ def save_model(model, scaler, emotions, filename='emotion_model.pkl'):
     
     print(f"Model saved to {filename}")
 
+def save_test_report(report_dict, filename='test_report.txt'):
+    """保存测试报告到txt文件，格式参考用户示例"""
+    with open(filename, 'w', encoding='utf-8') as f:
+        f.write('============================================================\n')
+        f.write('模型测试报告\n')
+        f.write(f'生成时间: {report_dict["gen_time"]}\n')
+        f.write(f'数据集: {report_dict["dataset_name"]}\n')
+        f.write('============================================================\n\n')
+        f.write(f'开始测试模型，使用数据集: {report_dict["dataset_name"]}\n\n')
+        f.write('测试结果:\n')
+        f.write(f'测试样本数量: {report_dict["n_samples"]}\n')
+        f.write(f'正确预测数量: {report_dict["n_correct"]}\n')
+        f.write(f'测试准确率: {report_dict["accuracy"]:.2f}%\n')
+        f.write(f'测试耗时: {report_dict["test_time_sec"]:.2f} 秒\n')
+        f.write(f'平均每个样本处理时间: {report_dict["avg_time_ms"]:.2f} 毫秒\n\n')
+        f.write('详细分类报告:\n')
+        f.write(report_dict["cls_report"] + '\n')
+        f.write('\n混淆矩阵:\n')
+        f.write(report_dict["cm_str"] + '\n')
+        f.write('\n各类别准确率:\n')
+        for line in report_dict["per_class_acc_lines"]:
+            f.write(line + '\n')
+        f.write('\n============================================================\n')
+        f.write(f'测试完成时间: {report_dict["end_time"]}\n')
+        f.write('============================================================\n')
+
+def evaluate_and_report(model, scaler, X_test, y_test, emotions, dataset_name='unknown'):
+    import time
+    from sklearn.metrics import classification_report, confusion_matrix
+    start_time = time.time()
+    X_test_scaled = scaler.transform(X_test)
+    y_pred = model.predict(X_test_scaled)
+    end_time = time.time()
+    n_samples = len(y_test)
+    n_correct = int((y_pred == y_test).sum())
+    accuracy = 100.0 * n_correct / n_samples if n_samples > 0 else 0.0
+    test_time_sec = end_time - start_time
+    avg_time_ms = (test_time_sec / n_samples * 1000) if n_samples > 0 else 0.0
+    # 分类报告
+    cls_report = classification_report(y_test, y_pred, target_names=emotions)
+    # 混淆矩阵
+    cm = confusion_matrix(y_test, y_pred)
+    # 混淆矩阵字符串
+    cm_str = '实际\\预测' + ''.join([f'{name:>10s}' for name in emotions]) + '\n'
+    for i, row in enumerate(cm):
+        cm_str += f'{emotions[i]:>10s}' + ''.join([f'{v:10d}' for v in row]) + '\n'
+    # 各类别准确率
+    per_class_acc_lines = []
+    for i, name in enumerate(emotions):
+        support = cm[i].sum()
+        correct = cm[i, i]
+        acc = 100.0 * correct / support if support > 0 else 0.0
+        per_class_acc_lines.append(f'{name:>10s}: {acc:6.2f}% ({correct}/{support})')
+    # 生成时间
+    now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    # 汇总
+    report_dict = {
+        'gen_time': now,
+        'dataset_name': dataset_name,
+        'n_samples': n_samples,
+        'n_correct': n_correct,
+        'accuracy': accuracy,
+        'test_time_sec': test_time_sec,
+        'avg_time_ms': avg_time_ms,
+        'cls_report': cls_report,
+        'cm_str': cm_str,
+        'per_class_acc_lines': per_class_acc_lines,
+        'end_time': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+    }
+    save_test_report(report_dict, filename=f'test_report_{dataset_name}.txt')
+    print(f"测试报告已保存到 test_report_{dataset_name}.txt")
+    return y_pred
+
 def main():
     # Load training data
     print("Loading training dataset...")
-    X_train_full, y_train_full, emotions = load_dataset('facial_expression_dataset/train')
+    X_train_full, y_train_full, emotions = load_dataset(DB_DIR+'/train')
     
     # Load test data
     print("Loading test dataset...")
-    X_test_full, y_test_full, _ = load_dataset('facial_expression_dataset/test')
+    X_test_full, y_test_full, _ = load_dataset(DB_DIR+'/test')
     
     print(f"Training samples: {len(X_train_full)}")
     print(f"Test samples: {len(X_test_full)}")
@@ -288,7 +363,7 @@ def main():
     
     # Evaluate on test set
     print("\nTest Set Performance:")
-    evaluate_model(model, scaler, X_test_full, y_test_full, emotions)
+    evaluate_and_report(model, scaler, X_test_full, y_test_full, emotions, dataset_name= DB_DIR)
     
     # Save the model
     save_model(model, scaler, emotions)
