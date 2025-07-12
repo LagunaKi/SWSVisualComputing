@@ -1,6 +1,6 @@
 # 忽略数据集文件夹
 facial_expression_dataset/
-
+bad_samples/
 # Python 相关文件
 __pycache__/
 *.py[cod]

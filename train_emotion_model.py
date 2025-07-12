@@ -11,9 +11,35 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from tqdm import tqdm
 
+
 # Initialize MediaPipe Face Mesh
 mp_face_mesh = mp.solutions.face_mesh
 mp_drawing = mp.solutions.drawing_utils
+
+# 面部对齐函数
+LEFT_EYE_IDX = [33, 133]
+RIGHT_EYE_IDX = [362, 263]
+def get_eye_center(landmarks, idxs, image_shape):
+    h, w = image_shape[:2]
+    points = np.array([[landmarks[i].x * w, landmarks[i].y * h] for i in idxs])
+    return np.mean(points, axis=0)
+
+def align_face(image, landmarks):
+    left_eye = get_eye_center(landmarks, LEFT_EYE_IDX, image.shape)
+    right_eye = get_eye_center(landmarks, RIGHT_EYE_IDX, image.shape)
+    desired_left_eye = (0.35, 0.35)
+    desired_right_eye = (0.65, 0.35)
+    desired_face_width = 48
+    desired_face_height = 48
+    src_pts = np.array([left_eye, right_eye, [left_eye[0], left_eye[1]+10]], dtype=np.float32)
+    dst_pts = np.array([
+        [desired_left_eye[0]*desired_face_width, desired_left_eye[1]*desired_face_height],
+        [desired_right_eye[0]*desired_face_width, desired_right_eye[1]*desired_face_height],
+        [desired_left_eye[0]*desired_face_width, (desired_left_eye[1]+0.1)*desired_face_height]
+    ], dtype=np.float32)
+    M = cv2.getAffineTransform(src_pts, dst_pts)
+    aligned_face = cv2.warpAffine(image, M, (desired_face_width, desired_face_height), flags=cv2.INTER_CUBIC)
+    return aligned_face
 
 class EmotionLandmarkExtractor:
     def __init__(self):
@@ -25,36 +51,32 @@ class EmotionLandmarkExtractor:
         )
         
     def extract_landmarks(self, image_path):
-        """Extract facial landmarks from an image"""
         try:
-            # Read image
             image = cv2.imread(image_path)
             if image is None:
                 return None
-                
-            # Convert to RGB
+            # 第一次提取关键点用于对齐
             image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            
-            # Process image
             results = self.face_mesh.process(image_rgb)
-            
-            if results.multi_face_landmarks:
-                # Get the first face landmarks
-                landmarks = results.multi_face_landmarks[0]
-                
-                # Extract landmark coordinates
-                landmark_coords = []
-                for landmark in landmarks.landmark:
-                    landmark_coords.extend([landmark.x, landmark.y, landmark.z])
-                
-                return np.array(landmark_coords)
-            else:
+            if not results.multi_face_landmarks:
                 return None
-                
+            landmarks = results.multi_face_landmarks[0].landmark
+            # 面部对齐
+            aligned_img = align_face(image, landmarks)
+            # 用对齐后图片再提取关键点
+            aligned_rgb = cv2.cvtColor(aligned_img, cv2.COLOR_BGR2RGB)
+            results_aligned = self.face_mesh.process(aligned_rgb)
+            if not results_aligned.multi_face_landmarks:
+                return None
+            aligned_landmarks = results_aligned.multi_face_landmarks[0].landmark
+            # 提取全部468点
+            landmark_coords = []
+            for lm in aligned_landmarks:
+                landmark_coords.extend([lm.x, lm.y, lm.z])
+            return np.array(landmark_coords)
         except Exception as e:
             print(f"Error processing {image_path}: {e}")
             return None
-    
     def close(self):
         self.face_mesh.close()
 
