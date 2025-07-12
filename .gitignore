@@ -1,7 +1,7 @@
 # 忽略数据集文件夹
 facial_expression_dataset/
 bad_samples/
-raf_db/
+raf-db/
 # Python 相关文件
 __pycache__/
 *.py[cod]
