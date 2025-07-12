@@ -79,19 +79,11 @@ class RealtimeEmotionDetector:
         if not results.multi_face_landmarks:
             return None, None
         landmarks = results.multi_face_landmarks[0].landmark
-        # 面部对齐
-        aligned_img = align_face(frame, landmarks)
-        # 用对齐后图片再提取关键点
-        aligned_rgb = cv2.cvtColor(aligned_img, cv2.COLOR_BGR2RGB)
-        results_aligned = self.face_mesh.process(aligned_rgb)
-        if not results_aligned.multi_face_landmarks:
-            return None, None
-        aligned_landmarks = results_aligned.multi_face_landmarks[0].landmark
-        # 提取全部468点
+        # 直接提取全部468点
         landmark_coords = []
-        for lm in aligned_landmarks:
+        for lm in landmarks:
             landmark_coords.extend([lm.x, lm.y, lm.z])
-        return np.array(landmark_coords), results_aligned.multi_face_landmarks[0]
+        return np.array(landmark_coords), results.multi_face_landmarks[0]
     
     def predict_emotion(self, landmarks):
         """Predict emotion from landmarks"""

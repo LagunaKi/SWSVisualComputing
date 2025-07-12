@@ -55,23 +55,14 @@ class EmotionLandmarkExtractor:
             image = cv2.imread(image_path)
             if image is None:
                 return None
-            # 第一次提取关键点用于对齐
             image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             results = self.face_mesh.process(image_rgb)
             if not results.multi_face_landmarks:
                 return None
             landmarks = results.multi_face_landmarks[0].landmark
-            # 面部对齐
-            aligned_img = align_face(image, landmarks)
-            # 用对齐后图片再提取关键点
-            aligned_rgb = cv2.cvtColor(aligned_img, cv2.COLOR_BGR2RGB)
-            results_aligned = self.face_mesh.process(aligned_rgb)
-            if not results_aligned.multi_face_landmarks:
-                return None
-            aligned_landmarks = results_aligned.multi_face_landmarks[0].landmark
-            # 提取全部468点
+            # 直接提取全部468点
             landmark_coords = []
-            for lm in aligned_landmarks:
+            for lm in landmarks:
                 landmark_coords.extend([lm.x, lm.y, lm.z])
             return np.array(landmark_coords)
         except Exception as e:
